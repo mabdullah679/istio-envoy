@@ -28,6 +28,94 @@ The rate-limit path is global, not local:
 
 This choice matters because Istio local rate limiting is per proxy instance. The requirement here is mesh-wide per-user enforcement, which requires Envoy's global ratelimit service.
 
+## Diagrams
+
+### Cluster Data Flow
+
+```mermaid
+flowchart LR
+    user[External Client\ncurl / browser / API caller]
+
+    subgraph kind["Kubernetes Cluster"]
+        subgraph istioSystem["istio-system namespace"]
+            ingress[Istio Ingress Gateway\nEnvoy proxy]
+            ratelimit[Ratelimit Service\nEnvoy global ratelimit]
+            redis[(Redis\nper-user counters)]
+        end
+
+        subgraph demoApps["demo-apps namespace"]
+            tester[Tester Pod\ncurl client + sidecar]
+
+            subgraph serviceAWorkload["service-a pod"]
+                serviceASidecar[Istio Sidecar\nEnvoy proxy]
+                serviceA[service-a\nSpring Boot API]
+            end
+
+            subgraph serviceBWorkload["service-b pod"]
+                serviceBSidecar[Istio Sidecar\nEnvoy proxy]
+                serviceB[service-b\nSpring Boot API]
+            end
+        end
+    end
+
+    user -->|HTTP with x-user-id| ingress
+    ingress -->|rate limit check\nuser_id descriptor| ratelimit
+    ratelimit -->|read / increment counter| redis
+    ingress -->|allow if under limit| serviceA
+    ingress -->|return 429 if over limit| user
+
+    serviceA -->|business request| serviceASidecar
+    serviceASidecar -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
+    serviceBSidecar -->|rate limit check\nuser_id descriptor| ratelimit
+    serviceBSidecar -->|allow if under limit| serviceB
+    serviceBSidecar -->|return 429 if over limit| serviceA
+
+    tester -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
+
+    serviceA -.->|relay endpoint forwards\nx-user-id| serviceBSidecar
+    serviceA -.->|hello endpoint returns 200\nunless ingress blocks| user
+```
+
+### Verify Script Flow
+
+```mermaid
+flowchart TD
+    start([Run python scripts/verify.py])
+    parse[Parse --user-id argument\nDefault: alice]
+    getTester[Get tester pod name\nkubectl get pod -l app=tester]
+
+    subgraph eastWest["East-west verification"]
+        ewLoop[Loop 55 times]
+        ewCall[kubectl exec into tester pod\ncurl service-b with x-user-id]
+        ewCollect[Collect HTTP status codes]
+        ewCount[Count 200 and 429 responses]
+        ewAssert{Expected 200=50\nand 429=5?}
+    end
+
+    subgraph northSouth["North-south verification"]
+        pfStart[Start kubectl port-forward\nistio-ingressgateway 18080:80]
+        nsLoop[Loop 55 times]
+        nsCall[curl localhost:18080\nHost: demo.local\nx-user-id: <user>-ingress]
+        nsCollect[Collect HTTP status codes]
+        nsCount[Count 200 and 429 responses]
+        nsAssert{Expected 200=50\nand 429=5?}
+        pfStop[Stop port-forward process]
+    end
+
+    success([Print Verification passed\nExit 0])
+    fail([Raise error\nExit non-zero])
+
+    start --> parse --> getTester --> ewLoop
+    ewLoop --> ewCall --> ewCollect --> ewLoop
+    ewLoop --> ewCount --> ewAssert
+    ewAssert -->|No| fail
+    ewAssert -->|Yes| pfStart --> nsLoop
+    nsLoop --> nsCall --> nsCollect --> nsLoop
+    nsLoop --> nsCount --> nsAssert
+    nsAssert -->|No| pfStop --> fail
+    nsAssert -->|Yes| pfStop --> success
+```
+
 ## Repository Layout
 
 - `pom.xml`
