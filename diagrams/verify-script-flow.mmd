@@ -1,0 +1,36 @@
+flowchart TD
+    start([Run python scripts/verify.py])
+    parse[Parse --user-id argument\nDefault: alice]
+    getTester[Get tester pod name\nkubectl get pod -l app=tester]
+
+    subgraph eastWest["East-west verification"]
+        ewLoop[Loop 55 times]
+        ewCall[kubectl exec into tester pod\ncurl service-b with x-user-id]
+        ewCollect[Collect HTTP status codes]
+        ewCount[Count 200 and 429 responses]
+        ewAssert{Expected 200=50\nand 429=5?}
+    end
+
+    subgraph northSouth["North-south verification"]
+        pfStart[Start kubectl port-forward\nistio-ingressgateway 18080:80]
+        nsLoop[Loop 55 times]
+        nsCall[curl localhost:18080\nHost: demo.local\nx-user-id: <user>-ingress]
+        nsCollect[Collect HTTP status codes]
+        nsCount[Count 200 and 429 responses]
+        nsAssert{Expected 200=50\nand 429=5?}
+        pfStop[Stop port-forward process]
+    end
+
+    success([Print Verification passed\nExit 0])
+    fail([Raise error\nExit non-zero])
+
+    start --> parse --> getTester --> ewLoop
+    ewLoop --> ewCall --> ewCollect --> ewLoop
+    ewLoop --> ewCount --> ewAssert
+    ewAssert -->|No| fail
+    ewAssert -->|Yes| pfStart --> nsLoop
+    nsLoop --> nsCall --> nsCollect --> nsLoop
+    nsLoop --> nsCount --> nsAssert
+    nsAssert -->|No| pfStop --> fail
+    nsAssert -->|Yes| pfStop --> success
+

@@ -1,0 +1,42 @@
+flowchart LR
+    user[External Client\ncurl / browser / API caller]
+
+    subgraph kind["Kubernetes Cluster"]
+        subgraph istioSystem["istio-system namespace"]
+            ingress[Istio Ingress Gateway\nEnvoy proxy]
+            ratelimit[Ratelimit Service\nEnvoy global ratelimit]
+            redis[(Redis\nper-user counters)]
+        end
+
+        subgraph demoApps["demo-apps namespace"]
+            tester[Tester Pod\ncurl client + sidecar]
+
+            subgraph serviceAWorkload["service-a pod"]
+                serviceASidecar[Istio Sidecar\nEnvoy proxy]
+                serviceA[service-a\nSpring Boot API]
+            end
+
+            subgraph serviceBWorkload["service-b pod"]
+                serviceBSidecar[Istio Sidecar\nEnvoy proxy]
+                serviceB[service-b\nSpring Boot API]
+            end
+        end
+    end
+
+    user -->|HTTP with x-user-id| ingress
+    ingress -->|rate limit check\nuser_id descriptor| ratelimit
+    ratelimit -->|read / increment counter| redis
+    ingress -->|allow if under limit| serviceA
+    ingress -->|return 429 if over limit| user
+
+    serviceA -->|business request| serviceASidecar
+    serviceASidecar -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
+    serviceBSidecar -->|rate limit check\nuser_id descriptor| ratelimit
+    serviceBSidecar -->|allow if under limit| serviceB
+    serviceBSidecar -->|return 429 if over limit| serviceA
+
+    tester -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
+
+    serviceA -.->|relay endpoint forwards\nx-user-id| serviceBSidecar
+    serviceA -.->|hello endpoint returns 200\nunless ingress blocks| user
+
