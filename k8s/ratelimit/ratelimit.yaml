@@ -18,7 +18,7 @@ metadata:
   name: redis
   namespace: istio-system
 spec:
-  replicas: 1
+  replicas: 1  # counters are ephemeral (1-minute windows); losing Redis fails open, see README
   selector:
     matchLabels:
       app: redis
@@ -29,9 +29,32 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7.4-alpine
+          image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499  # redis:7.4-alpine
+          args: ["--save", "", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "volatile-ttl"]
           ports:
             - containerPort: 6379
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 96Mi
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service
@@ -52,7 +75,7 @@ metadata:
   name: ratelimit
   namespace: istio-system
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ratelimit
@@ -63,7 +86,7 @@ spec:
     spec:
       containers:
         - name: ratelimit
-          image: envoyproxy/ratelimit:master
+          image: envoyproxy/ratelimit@sha256:b3e5d52c9b1d10b4cfc49417bec2a47d4da3c083284b556d18198e91fde39467  # envoyproxy/ratelimit:master, pinned 2026-10-20
           imagePullPolicy: IfNotPresent
           command: ["/bin/ratelimit"]
           env:
@@ -90,6 +113,28 @@ spec:
               containerPort: 8081
             - name: http
               containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 10
           volumeMounts:
             - name: config-volume
               mountPath: /data/ratelimit/config/config.yaml
@@ -114,3 +159,14 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ratelimit
+  namespace: istio-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ratelimit

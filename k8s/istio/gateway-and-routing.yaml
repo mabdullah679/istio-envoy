@@ -12,7 +12,7 @@ spec:
         name: http
         protocol: HTTP
       hosts:
-        - demo.local
+        - "*"
 ---
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -21,7 +21,7 @@ metadata:
   namespace: demo-apps
 spec:
   hosts:
-    - demo.local
+    - "*"
   gateways:
     - demo-gateway
   http:

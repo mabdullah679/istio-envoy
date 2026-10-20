@@ -1,0 +1,22 @@
+# Release name MUST be istio-ingressgateway (gives the istio=ingressgateway label the EnvoyFilter and Gateway select on).
+replicaCount: 2
+autoscaling:
+  enabled: false
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+service:
+  type: LoadBalancer
+  annotations:
+    # In-tree AWS provider builds a Network Load Balancer (no extra controller to install/pay for).
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  ports:
+    - name: http2
+      port: 80
+      protocol: TCP
+      targetPort: 80
