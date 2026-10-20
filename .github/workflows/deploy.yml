@@ -156,6 +156,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - run: aws eks update-kubeconfig --name "$CLUSTER_NAME"
       - name: verify.py against the public NLB (relay, validation, 50x200/5x429, mTLS)
+        shell: bash # -eo pipefail: without it `| tee` would hide verify.py's exit code (this exact bug shipped a false green once)
         run: python3 scripts/verify.py | tee smoke.log
       - uses: actions/upload-artifact@v7
         if: always()
