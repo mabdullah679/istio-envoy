@@ -1,36 +1,24 @@
 flowchart TD
-    start([Run python scripts/verify.py])
-    parse[Parse --user-id argument\nDefault: alice]
-    getTester[Get tester pod name\nkubectl get pod -l app=tester]
+    start([python scripts/verify.py])
+    url[Base URL = --base-url or the istio-ingressgateway NLB hostname]
+    warm[Wait until GET /api/public/hello returns 200\nNLB DNS and targets can lag]
+    relay{relay: service-a -> service-b\n200 and downstream.service = service-b?}
+    valid{validation: bad / long / missing x-user-id\nall HTTP 400?}
+    window[Wait for early in the minute\nfixed 1-minute rate-limit windows]
+    ns{north-south: 55 requests, one user\nfirst 50 = 200, last 5 = 429?}
+    ew{east-west: tester pod -> service-b\n50 x 200 then 5 x 429?}
+    mtls{mtls: sidecar caller gets 200,\nno-sidecar pod is reset - curl exit 56?}
+    ok([Verification passed - exit 0])
+    fail([FAIL - exit non-zero])
 
-    subgraph eastWest["East-west verification"]
-        ewLoop[Loop 55 times]
-        ewCall[kubectl exec into tester pod\ncurl service-b with x-user-id]
-        ewCollect[Collect HTTP status codes]
-        ewCount[Count 200 and 429 responses]
-        ewAssert{Expected 200=50\nand 429=5?}
-    end
-
-    subgraph northSouth["North-south verification"]
-        pfStart[Start kubectl port-forward\nistio-ingressgateway 18080:80]
-        nsLoop[Loop 55 times]
-        nsCall[curl localhost:18080\nHost: demo.local\nx-user-id: <user>-ingress]
-        nsCollect[Collect HTTP status codes]
-        nsCount[Count 200 and 429 responses]
-        nsAssert{Expected 200=50\nand 429=5?}
-        pfStop[Stop port-forward process]
-    end
-
-    success([Print Verification passed\nExit 0])
-    fail([Raise error\nExit non-zero])
-
-    start --> parse --> getTester --> ewLoop
-    ewLoop --> ewCall --> ewCollect --> ewLoop
-    ewLoop --> ewCount --> ewAssert
-    ewAssert -->|No| fail
-    ewAssert -->|Yes| pfStart --> nsLoop
-    nsLoop --> nsCall --> nsCollect --> nsLoop
-    nsLoop --> nsCount --> nsAssert
-    nsAssert -->|No| pfStop --> fail
-    nsAssert -->|Yes| pfStop --> success
-
+    start --> url --> warm --> relay
+    relay -->|yes| valid
+    valid -->|yes| window --> ns
+    ns -->|yes| ew
+    ew -->|yes| mtls
+    mtls -->|yes| ok
+    relay -->|no| fail
+    valid -->|no| fail
+    ns -->|no| fail
+    ew -->|no| fail
+    mtls -->|no| fail

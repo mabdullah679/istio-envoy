@@ -1,0 +1,14 @@
+flowchart LR
+    push[git push prod-hardening]
+    subgraph gha["GitHub Actions - assumes AWS role via OIDC, no stored keys"]
+        test[test\nmvn verify, py_compile, YAML parse]
+        plan[plan\nterraform fmt, validate, plan]
+        apply[apply\nVPC, EKS, node group, ECR]
+        images[images\nbuild and push, tag = git SHA]
+        deploy[deploy\nhelm Istio + kubectl apply]
+        smoke[smoke\nverify.py against the load balancer]
+    end
+    s3[(S3 state\nversioned, lockfile)]
+    push --> test --> plan --> apply --> images --> deploy --> smoke
+    plan -.-> s3
+    apply -.-> s3

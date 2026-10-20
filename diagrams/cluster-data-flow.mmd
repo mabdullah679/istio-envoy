@@ -1,42 +1,40 @@
 flowchart LR
-    user[External Client\ncurl / browser / API caller]
+    user[External client<br/>curl / browser]
 
-    subgraph kind["Kubernetes Cluster"]
-        subgraph istioSystem["istio-system namespace"]
-            ingress[Istio Ingress Gateway\nEnvoy proxy]
-            ratelimit[Ratelimit Service\nEnvoy global ratelimit]
-            redis[(Redis\nper-user counters)]
-        end
+    subgraph aws["AWS ap-southeast-2 - VPC 10.20.0.0/16, 2 public subnets"]
+        nlb[Network Load Balancer<br/>created by the istio-ingressgateway Service]
 
-        subgraph demoApps["demo-apps namespace"]
-            tester[Tester Pod\ncurl client + sidecar]
-
-            subgraph serviceAWorkload["service-a pod"]
-                serviceASidecar[Istio Sidecar\nEnvoy proxy]
-                serviceA[service-a\nSpring Boot API]
+        subgraph eks["EKS pf-istio-envoy-eks - 2 x t3.medium"]
+            subgraph istioSystem["istio-system"]
+                ingress[Istio ingress gateway x2<br/>Envoy]
+                istiod[istiod]
+                ratelimit[Ratelimit service x2<br/>envoyproxy/ratelimit]
+                redis[(Redis<br/>per-user counters)]
             end
 
-            subgraph serviceBWorkload["service-b pod"]
-                serviceBSidecar[Istio Sidecar\nEnvoy proxy]
-                serviceB[service-b\nSpring Boot API]
+            subgraph demoApps["demo-apps - PeerAuthentication STRICT"]
+                tester[tester pod<br/>curl + sidecar]
+                subgraph podA["service-a x2"]
+                    sidecarA[sidecar]
+                    serviceA[Spring Boot]
+                end
+                subgraph podB["service-b x2"]
+                    sidecarB[sidecar]
+                    serviceB[Spring Boot]
+                end
             end
         end
+        ecr[(ECR<br/>service-a, service-b)]
     end
 
-    user -->|HTTP with x-user-id| ingress
-    ingress -->|rate limit check\nuser_id descriptor| ratelimit
-    ratelimit -->|read / increment counter| redis
-    ingress -->|allow if under limit| serviceA
-    ingress -->|return 429 if over limit| user
-
-    serviceA -->|business request| serviceASidecar
-    serviceASidecar -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
-    serviceBSidecar -->|rate limit check\nuser_id descriptor| ratelimit
-    serviceBSidecar -->|allow if under limit| serviceB
-    serviceBSidecar -->|return 429 if over limit| serviceA
-
-    tester -->|HTTP to service-b\nwith x-user-id| serviceBSidecar
-
-    serviceA -.->|relay endpoint forwards\nx-user-id| serviceBSidecar
-    serviceA -.->|hello endpoint returns 200\nunless ingress blocks| user
-
+    user -->|HTTP + x-user-id| nlb --> ingress
+    ingress -->|rate limit check<br/>user_id| ratelimit --> redis
+    ingress -->|allow: mTLS| sidecarA --> serviceA
+    ingress -.->|over limit: 429| user
+    sidecarA -->|mTLS + x-user-id| sidecarB
+    sidecarB -->|rate limit check| ratelimit
+    sidecarB --> serviceB
+    tester -->|mTLS| sidecarB
+    istiod -.->|xDS config + certs| ingress
+    ecr -.->|image pull| serviceA
+    ecr -.->|image pull| serviceB
