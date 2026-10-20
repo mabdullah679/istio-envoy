@@ -1,0 +1,10 @@
+# Sidecars in demo-apps accept ONLY mutual-TLS connections. A plaintext caller (no sidecar, or one
+# outside the mesh) has its connection reset. Proven by `python scripts/verify.py --check mtls`.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: demo-apps
+spec:
+  mtls:
+    mode: STRICT

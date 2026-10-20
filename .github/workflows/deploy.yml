@@ -1,0 +1,166 @@
+name: deploy
+
+# lint/test/build -> terraform fmt/validate/plan -> apply -> push images -> deploy mesh+apps -> smoke test
+on:
+  push:
+    branches: [prod-hardening]
+    paths-ignore: ['**.md', '**.txt', '.github/DESTROY'] # docs or a teardown request must never trigger a rebuild
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC: no AWS keys are stored anywhere
+  contents: read
+
+concurrency:
+  group: istio-envoy-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  AWS_ACCOUNT_ID: "346208529954"
+  ROLE_ARN: arn:aws:iam::346208529954:role/pf-istio-envoy-ci-deploy
+  NAME_PREFIX: pf-istio-envoy
+  CLUSTER_NAME: pf-istio-envoy-eks
+  TF_VERSION: 1.13.5
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Unit tests (both services)
+        run: mvn -B -ntp verify
+      - name: Python scripts compile
+        run: python3 -m py_compile scripts/*.py
+      - name: Kubernetes manifests parse
+        run: |
+          python3 -c "
+          import glob, yaml
+          for f in glob.glob('k8s/**/*.yaml', recursive=True):
+              list(yaml.safe_load_all(open(f)))
+              print('ok', f)"
+
+  plan:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Guard - must be the portfolio account
+        run: |
+          acct=$(aws sts get-caller-identity --query Account --output text)
+          test "$acct" = "$AWS_ACCOUNT_ID"
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform -chdir=terraform fmt -check -recursive
+      - run: terraform -chdir=terraform init -input=false
+      - run: terraform -chdir=terraform validate
+      - run: terraform -chdir=terraform plan -input=false -out=tfplan -no-color
+      - name: Plan summary
+        run: terraform -chdir=terraform show -no-color tfplan | tail -n 25
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          retention-days: 1
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    outputs:
+      ecr_a: ${{ steps.out.outputs.ecr_a }}
+      ecr_b: ${{ steps.out.outputs.ecr_b }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: tfplan
+          path: terraform
+      - run: terraform -chdir=terraform init -input=false
+      - run: terraform -chdir=terraform apply -input=false -no-color tfplan
+      - id: out
+        run: |
+          echo "ecr_a=$(terraform -chdir=terraform output -json ecr_repositories | jq -r '."service-a"')" >> "$GITHUB_OUTPUT"
+          echo "ecr_b=$(terraform -chdir=terraform output -json ecr_repositories | jq -r '."service-b"')" >> "$GITHUB_OUTPUT"
+
+  images:
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and push service-a
+        run: |
+          tag="${GITHUB_SHA}"
+          repo="${{ needs.apply.outputs.ecr_a }}"
+          if aws ecr describe-images --repository-name "${NAME_PREFIX}-service-a" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+            echo "image $tag already in ECR (tags are immutable); skipping"; exit 0; fi
+          docker buildx build --push -t "$repo:$tag" -f services/service-a/Dockerfile \
+            --cache-from type=gha,scope=a --cache-to type=gha,scope=a,mode=max .
+      - name: Build and push service-b
+        run: |
+          tag="${GITHUB_SHA}"
+          repo="${{ needs.apply.outputs.ecr_b }}"
+          if aws ecr describe-images --repository-name "${NAME_PREFIX}-service-b" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+            echo "image $tag already in ECR (tags are immutable); skipping"; exit 0; fi
+          docker buildx build --push -t "$repo:$tag" -f services/service-b/Dockerfile \
+            --cache-from type=gha,scope=b --cache-to type=gha,scope=b,mode=max .
+
+  deploy:
+    needs: [apply, images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name "$CLUSTER_NAME"
+      - name: Install Istio, apply manifests, wait for rollouts
+        run: |
+          python3 scripts/deploy.py --install-istio --with-tester --wait \
+            --image-a "${{ needs.apply.outputs.ecr_a }}:${GITHUB_SHA}" \
+            --image-b "${{ needs.apply.outputs.ecr_b }}:${GITHUB_SHA}"
+      - name: Show public endpoint
+        run: kubectl -n istio-system get svc istio-ingressgateway -o wide
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name "$CLUSTER_NAME"
+      - name: verify.py against the public NLB (relay, validation, 50x200/5x429, mTLS)
+        shell: bash # -eo pipefail: without it `| tee` would hide verify.py's exit code (this exact bug shipped a false green once)
+        run: python3 scripts/verify.py | tee smoke.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-log
+          path: smoke.log

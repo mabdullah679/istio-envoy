@@ -1,13 +1,29 @@
 spring:
   application:
     name: service-a
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
 server:
   port: 8080
+  shutdown: graceful
+
+service-b:
+  base-url: ${SERVICE_B_BASE_URL:http://service-b.demo-apps.svc.cluster.local:8080}
+  connect-timeout: ${SERVICE_B_CONNECT_TIMEOUT:2s}
+  read-timeout: ${SERVICE_B_READ_TIMEOUT:3s}
+
+logging:
+  structured:
+    format:
+      console: ecs
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
-
+  endpoint:
+    health:
+      probes:
+        enabled: true

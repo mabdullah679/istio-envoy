@@ -1,13 +1,24 @@
 spring:
   application:
     name: service-b
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
 server:
   port: 8080
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: ecs
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
-
+  endpoint:
+    health:
+      probes:
+        enabled: true

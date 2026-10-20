@@ -1,0 +1,60 @@
+name: destroy
+
+# Manual only. Removes the Kubernetes-created NLB first (Terraform does not know about it and the VPC
+# cannot be deleted while it exists), then runs terraform destroy.
+# workflow_dispatch only works for workflows on the default branch, and this repo's work lives on
+# prod-hardening (main is untouched), so the teardown is also triggered by pushing the request file
+# .github/DESTROY containing the word "destroy" on prod-hardening.
+on:
+  push:
+    branches: [prod-hardening]
+    paths: ['.github/DESTROY']
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to tear the stack down'
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: istio-envoy-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  ROLE_ARN: arn:aws:iam::346208529954:role/pf-istio-envoy-ci-deploy
+  CLUSTER_NAME: pf-istio-envoy-eks
+
+jobs:
+  destroy:
+    if: ${{ github.event_name == 'push' || inputs.confirm == 'destroy' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require the request file on push
+        if: ${{ github.event_name == 'push' }}
+        run: grep -qx destroy .github/DESTROY
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+      - name: Delete the NLB-backed Service and wait for the load balancer to disappear
+        run: |
+          if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --name "$CLUSTER_NAME"
+            helm uninstall istio-ingressgateway -n istio-system || true
+            kubectl delete svc -A -l app=istio-ingressgateway --ignore-not-found || true
+            vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=pf-istio-envoy-vpc --query 'Vpcs[0].VpcId' --output text)
+            for i in $(seq 1 30); do
+              n=$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?VpcId=='$vpc'])" --output text)
+              echo "load balancers left in $vpc: $n"; [ "$n" = "0" ] && break; sleep 10
+            done
+          fi
+      - run: terraform -chdir=terraform init -input=false
+      - run: terraform -chdir=terraform destroy -auto-approve -input=false -no-color

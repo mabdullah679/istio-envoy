@@ -1,0 +1,5 @@
+**/target/
+.git/
+terraform/
+.github/
+k8s/

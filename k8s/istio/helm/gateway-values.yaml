@@ -1,0 +1,24 @@
+# Release name MUST be istio-ingressgateway (gives the istio=ingressgateway label the EnvoyFilter and Gateway select on).
+replicaCount: 2
+autoscaling:
+  enabled: false
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+service:
+  type: LoadBalancer
+  annotations:
+    # This AWS account rejects elbv2 CreateLoadBalancer ("account currently does not support creating
+    # load balancers"), so NLB/ALB are impossible here (observed 2026-10-20, see README). Classic ELB is
+    # allowed, so the in-tree provider's default (a Classic ELB, TCP:80 -> node port) is what we get.
+    # On an account with elbv2 enabled, add: service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  ports:
+    - name: http2
+      port: 80
+      protocol: TCP
+      targetPort: 80
