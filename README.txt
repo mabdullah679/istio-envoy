@@ -28,17 +28,17 @@ Things that went wrong and were fixed
 - The old cluster diagram picture showed the old local layout and the local drawing tool crashed on the new one, so the old picture was removed and the diagram source file is kept.
 
 Not tested
-Draining a server, shutting down under load, Redis or the rate-limit service going down (it is set to let traffic through if it does), the destroy workflow, ECR vulnerability scan results, and the old local kind path after these changes. Cost numbers are estimates from list prices, not a bill.
+Draining a server, shutting down under load, Redis or the rate-limit service going down (it is set to let traffic through if it does), ECR vulnerability scan results, and the old local kind path after these changes. Cost numbers are estimates from list prices, not a bill.
 
 Cost and cleanup
-About 0.31 US dollars per hour while running (cluster 0.10, two servers 0.106, load balancer 0.028, public addresses 0.02, disks 0.007). This stack is meant to be temporary. To tear down:
-  gh workflow run destroy.yml --ref prod-hardening -f confirm=destroy
-  terraform -chdir=terraform/bootstrap destroy      (run last)
-To rebuild with one command (once the bootstrap step has been done): gh workflow run deploy.yml --ref prod-hardening. It takes about 20 minutes.
-Note: when this was written the destroy workflow had not yet been run; update this paragraph with the real result afterwards.
+It cost about 0.31 US dollars per hour while running (estimate from list prices, not a bill): cluster 0.10, two servers 0.106, load balancer 0.028, public addresses 0.02, disks 0.007.
+It was verified live on 2026-10-20 and then torn down the same day to save money. The live address above no longer works.
+The teardown worked on its first run. It removed the load balancer first, then everything Terraform built, then (last) the state bucket and the CI role. Lookups afterwards found nothing left with the pf-istio-envoy name or the repo=istio-envoy tag. For a few minutes the old address still answered, but from addresses that no longer belonged to this account (DNS caching); it then stopped resolving.
+One correction: the command "gh workflow run" does not work here, because GitHub only runs manually-started workflows that exist on the main branch and this work is on prod-hardening. Pushing to the branch starts a deploy. Pushing a file called .github/DESTROY containing the word destroy starts a teardown. Pushes that only change documentation do not start a deploy.
+To rebuild: run the bootstrap step again (terraform -chdir=terraform/bootstrap init, then apply), then push any commit to prod-hardening. It takes about 20 minutes.
 
 How to run it yourself
 1. terraform -chdir=terraform/bootstrap init, then apply (once).
-2. git push origin prod-hardening (or run the deploy workflow by hand).
+2. git push origin prod-hardening (this starts the deploy).
 3. aws eks update-kubeconfig --name pf-istio-envoy-eks --region ap-southeast-2, then python3 scripts/verify.py to repeat the proof.
 Tests without any cluster: mvn -B verify (needs Java 25 and Maven).

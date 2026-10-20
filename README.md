@@ -36,7 +36,7 @@ More diagrams: [cluster data flow](diagrams/cluster-data-flow.mmd), [verify.py f
 
 ## Deployed on AWS
 
-Evidence, 2026-10-20, account 346208529954, region ap-southeast-2. Pipeline run: https://github.com/mabdullah679/istio-envoy/actions/runs/39392988777 (jobs test, plan, apply, images, deploy, smoke all green, deploy and smoke executed by GitHub Actions through OIDC).
+Verified live on 2026-10-20, then torn down the same day to save cost. Evidence from that run: account 346208529954, region ap-southeast-2. Pipeline run: https://github.com/mabdullah679/istio-envoy/actions/runs/39392988777 (jobs test, plan, apply, images, deploy, smoke all green, deploy and smoke executed by GitHub Actions through OIDC).
 
 URL pattern: `http://<random-id>.ap-southeast-2.elb.amazonaws.com` (a new hostname every rebuild). The one that was live: `http://a1f3ee6776b754e72938d7ed9b07ec66-239342470.ap-southeast-2.elb.amazonaws.com`.
 
@@ -53,16 +53,18 @@ What was curled and what came back:
 
 Resources (all prefixed `pf-istio-envoy-`, tagged `project=portfolio repo=istio-envoy managed-by=terraform`): VPC, internet gateway, 2 public subnets, route table, EKS cluster `pf-istio-envoy-eks` (Kubernetes 1.35), managed node group of 2 x t3.medium, `metrics-server` add-on, 2 IAM roles (cluster, node), 2 ECR repositories with lifecycle policies, 1 EKS access entry; from Kubernetes: one Classic ELB (made by the gateway Service), 3 Helm releases (`istio-base`, `istiod`, `istio-ingressgateway`). Outside the stack module: S3 state bucket and the IAM role `pf-istio-envoy-ci-deploy` (bootstrap).
 
-Cost: the stack is ephemeral by design. Estimated from public list prices, not an invoice, about 0.31 USD/hour (EKS control plane 0.10, 2 x t3.medium 0.106, Classic ELB 0.028, 4 public IPv4 addresses 0.02, 2 x 20 GB EBS 0.007, rest negligible). Tear down:
+Cost: the stack is ephemeral by design. Estimated from public list prices, not an invoice, about 0.31 USD/hour while it ran (EKS control plane 0.10, 2 x t3.medium 0.106, Classic ELB 0.028, 4 public IPv4 addresses 0.02, 2 x 20 GB EBS 0.007, rest negligible).
+
+Torn down on 2026-10-20 after the owner approved. Rebuild (one command, plus a one-time bootstrap because the bootstrap resources were destroyed too):
 
 ```
-gh workflow run destroy.yml --ref prod-hardening -f confirm=destroy      # removes the ELB first, then terraform destroy
-terraform -chdir=terraform/bootstrap destroy                              # last: state bucket + CI role
+terraform -chdir=terraform/bootstrap init && terraform -chdir=terraform/bootstrap apply   # state bucket + CI role
+git commit --allow-empty -m rebuild && git push origin prod-hardening                      # runs deploy.yml (about 20 minutes)
 ```
 
-Rebuild with one command (bootstrap already applied): `gh workflow run deploy.yml --ref prod-hardening`. About 20 minutes from nothing: EKS about 10 minutes, Istio and apps about 5, smoke about 1.
+Note: `gh workflow run ... --ref prod-hardening` does NOT work in this repo. GitHub only dispatches workflows that exist on the default branch, and the work lives on `prod-hardening` (the first attempt returned HTTP 404). Pushing to the branch triggers `deploy.yml`; the teardown is triggered by pushing a `.github/DESTROY` file containing `destroy` (see [destroy.yml](.github/workflows/destroy.yml)), then `terraform -chdir=terraform/bootstrap destroy` last. Pushes that only change `*.md`, `*.txt` or `.github/DESTROY` do not trigger a deploy.
 
-Status of this section: the destroy workflow had not been run at the time this was written; update this paragraph with the real teardown result once it has.
+What the first-ever teardown run actually did (run 39402051758): it succeeded on the first attempt, no fixes needed. It uninstalled the gateway release, waited for the load balancer to disappear from the VPC, then `terraform destroy` removed the 22 Terraform-managed resources. `terraform -chdir=terraform/bootstrap destroy` then removed the state bucket (with all versions) and the CI role (6 resources). Direct lookups afterwards found nothing carrying the `pf-istio-envoy` prefix or `repo=istio-envoy` tag: no EKS cluster, no Classic or v2 load balancers in the account, no EC2 instances, EBS volumes, ENIs, VPC, subnets, internet gateway, security groups, ECR repositories, S3 bucket, IAM roles, EKS log groups or KMS aliases; the Resource Groups Tagging API reported 0 resources (that API can lag). The old URL stopped resolving (NXDOMAIN) a few minutes later; for a short window the hostname still answered HTTP 401 from IPs that no longer belonged to this account, which was DNS caching of reused load-balancer IPs, not this stack.
 
 ### Deviation from the original brief
 
@@ -82,10 +84,9 @@ The brief asked for an NLB. This account rejects `elbv2:CreateLoadBalancer` ("Th
    terraform -chdir=terraform/bootstrap init
    terraform -chdir=terraform/bootstrap apply
    ```
-2. Push the branch (or run the workflow by hand):
+2. Push the branch (this triggers deploy.yml):
    ```
    git push origin prod-hardening
-   gh workflow run deploy.yml --ref prod-hardening
    ```
 3. Find the URL and run the proof yourself:
    ```
@@ -184,7 +185,7 @@ Unit tests: 11 for service-a, 6 for service-b (validation, header handling, erro
 
 ## Not established
 
-- Node drain with PDBs, graceful shutdown under load, Redis or ratelimit outage behaviour, and the destroy workflow were not exercised.
+- Node drain with PDBs, graceful shutdown under load, and Redis or ratelimit outage behaviour were not exercised.
 - ECR image-scan findings were not reviewed. EKS control-plane logging is off to save cost.
 - The local kind path was not re-run after these changes.
 - Cost figures are list-price estimates; no invoice was read.

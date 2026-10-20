@@ -4,6 +4,7 @@ name: deploy
 on:
   push:
     branches: [prod-hardening]
+    paths-ignore: ['**.md', '**.txt', '.github/DESTROY'] # docs or a teardown request must never trigger a rebuild
   workflow_dispatch:
 
 permissions:
