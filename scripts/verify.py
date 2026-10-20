@@ -153,10 +153,11 @@ def check_mtls():
         print(f"plaintext caller (no sidecar) -> HTTP '{plain}' exit={run.returncode} stderr={run.stderr.strip()[-200:]}")
     finally:
         sh(["kubectl", "delete", "namespace", "plain-test", "--wait=false"], check=False)
-    # curl exit 56 (reset) / 52 (empty reply) with http_code 000 = connection killed by STRICT mTLS
-    rejected = plain in ("", "000") and run.returncode in (52, 56)
+    # kubectl run collapses the pod's exit code to 1, so read curl's own error from the output:
+    # (56) = connection reset, (52) = empty reply, http_code 000 = no HTTP response at all.
+    rejected = plain.endswith("000") and ("(56)" in plain or "(52)" in plain)
     if meshed != "200" or not rejected:
-        raise SystemExit("FAIL mtls: expected meshed=200 and plaintext connection reset (curl exit 52/56)")
+        raise SystemExit("FAIL mtls: expected meshed=200 and plaintext connection reset (curl error 52/56)")
     print("PASS mtls (STRICT PeerAuthentication rejects plaintext; mTLS caller gets 200)")
 
 
@@ -174,10 +175,11 @@ def main():
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(5)
             base_url = "http://127.0.0.1:18080"
-        else:
-            base_url = (args.base_url or discover_base_url()).rstrip("/")
         wanted = CHECKS if args.check == "all" else [args.check]
-        if any(c in wanted for c in ("relay", "validation", "north-south")):
+        needs_url = any(c in wanted for c in ("relay", "validation", "north-south"))
+        if not args.port_forward:
+            base_url = (args.base_url or (discover_base_url() if needs_url else "")).rstrip("/")
+        if needs_url:
             wait_until_serving(base_url)
         if "relay" in wanted:
             check_relay(base_url)
