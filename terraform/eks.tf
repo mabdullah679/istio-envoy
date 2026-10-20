@@ -103,3 +103,10 @@ resource "aws_eks_node_group" "main" {
 
   depends_on = [aws_iam_role_policy_attachment.node]
 }
+
+# metrics-server: `kubectl top` is how node/pod sizing was measured (and what an HPA would need).
+resource "aws_eks_addon" "metrics_server" {
+  cluster_name = aws_eks_cluster.main.name
+  addon_name   = "metrics-server"
+  depends_on   = [aws_eks_node_group.main]
+}
