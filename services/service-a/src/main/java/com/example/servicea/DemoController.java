@@ -23,6 +23,8 @@ public class DemoController {
         @RequestHeader(name = USER_HEADER) String userId,
         @RequestParam(name = "message", defaultValue = "hello from service-a") String message
     ) {
+        RequestValidator.userId(userId);
+        RequestValidator.message(message);
         return new EchoPayload("service-a", userId, message, System.currentTimeMillis());
     }
 
@@ -31,10 +33,12 @@ public class DemoController {
         @RequestHeader(name = USER_HEADER) String userId,
         @RequestParam(name = "message", defaultValue = "relay from service-a") String message
     ) {
+        RequestValidator.userId(userId);
+        RequestValidator.message(message);
         EchoPayload downstream = serviceBRestClient.get()
             .uri(uriBuilder -> uriBuilder.path("/api/backend/echo")
-                .queryParam("message", message)
-                .build())
+                .queryParam("message", "{message}")
+                .build(message))
             .header(HttpHeaders.ACCEPT, "application/json")
             .header(USER_HEADER, userId)
             .retrieve()

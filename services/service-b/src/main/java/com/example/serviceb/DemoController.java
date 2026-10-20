@@ -15,6 +15,8 @@ public class DemoController {
         @RequestHeader(name = USER_HEADER) String userId,
         @RequestParam(name = "message", defaultValue = "hello from service-b") String message
     ) {
+        RequestValidator.userId(userId);
+        RequestValidator.message(message);
         return new EchoPayload("service-b", userId, message, System.currentTimeMillis());
     }
 }
