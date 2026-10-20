@@ -1,40 +1,29 @@
 flowchart LR
-    user[External client<br/>curl / browser]
+    user[External client]
+    elb["Classic ELB :80"]
 
-    subgraph aws["AWS ap-southeast-2 - VPC 10.20.0.0/16, 2 public subnets"]
-        nlb[Network Load Balancer<br/>created by the istio-ingressgateway Service]
-
-        subgraph eks["EKS pf-istio-envoy-eks - 2 x t3.medium"]
-            subgraph istioSystem["istio-system"]
-                ingress[Istio ingress gateway x2<br/>Envoy]
-                istiod[istiod]
-                ratelimit[Ratelimit service x2<br/>envoyproxy/ratelimit]
-                redis[(Redis<br/>per-user counters)]
-            end
-
-            subgraph demoApps["demo-apps - PeerAuthentication STRICT"]
-                tester[tester pod<br/>curl + sidecar]
-                subgraph podA["service-a x2"]
-                    sidecarA[sidecar]
-                    serviceA[Spring Boot]
-                end
-                subgraph podB["service-b x2"]
-                    sidecarB[sidecar]
-                    serviceB[Spring Boot]
-                end
-            end
-        end
-        ecr[(ECR<br/>service-a, service-b)]
+    subgraph istioSystem["istio-system"]
+        ingress["Ingress gateway x2 (Envoy)"]
+        istiod["istiod"]
+        ratelimit["Ratelimit service x2"]
+        redis[("Redis counters")]
     end
 
-    user -->|HTTP + x-user-id| nlb --> ingress
-    ingress -->|rate limit check<br/>user_id| ratelimit --> redis
-    ingress -->|allow: mTLS| sidecarA --> serviceA
-    ingress -.->|over limit: 429| user
-    sidecarA -->|mTLS + x-user-id| sidecarB
-    sidecarB -->|rate limit check| ratelimit
-    sidecarB --> serviceB
-    tester -->|mTLS| sidecarB
-    istiod -.->|xDS config + certs| ingress
-    ecr -.->|image pull| serviceA
-    ecr -.->|image pull| serviceB
+    subgraph demoApps["demo-apps (mTLS STRICT)"]
+        tester["tester pod + sidecar"]
+        svcA["service-a x2 + sidecar"]
+        svcB["service-b x2 + sidecar"]
+    end
+
+    ecr[("ECR images")]
+
+    user -->|"HTTP + x-user-id"| elb --> ingress
+    ingress -->|"user_id descriptor"| ratelimit --> redis
+    ingress -->|"under limit, mTLS"| svcA
+    ingress -.->|"over limit: 429"| user
+    svcA -->|"mTLS + x-user-id"| svcB
+    svcB -->|"user_id descriptor"| ratelimit
+    tester -->|"mTLS"| svcB
+    istiod -.->|"xDS config and certs"| ingress
+    ecr -.->|"image pull"| svcA
+    ecr -.->|"image pull"| svcB
