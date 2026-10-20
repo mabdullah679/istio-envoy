@@ -2,12 +2,18 @@ name: destroy
 
 # Manual only. Removes the Kubernetes-created NLB first (Terraform does not know about it and the VPC
 # cannot be deleted while it exists), then runs terraform destroy.
+# workflow_dispatch only works for workflows on the default branch, and this repo's work lives on
+# prod-hardening (main is untouched), so the teardown is also triggered by pushing the request file
+# .github/DESTROY containing the word "destroy" on prod-hardening.
 on:
+  push:
+    branches: [prod-hardening]
+    paths: ['.github/DESTROY']
   workflow_dispatch:
     inputs:
       confirm:
         description: 'Type "destroy" to tear the stack down'
-        required: true
+        required: false
 
 permissions:
   id-token: write
@@ -24,10 +30,13 @@ env:
 
 jobs:
   destroy:
-    if: ${{ inputs.confirm == 'destroy' }}
+    if: ${{ github.event_name == 'push' || inputs.confirm == 'destroy' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Require the request file on push
+        if: ${{ github.event_name == 'push' }}
+        run: grep -qx destroy .github/DESTROY
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
