@@ -145,7 +145,7 @@ mvn -B verify          # needs Java 25 and Maven only; no cluster, no network se
 python3 scripts/verify.py --base-url http://<elb-host>   # live; needs kubectl access for east-west and mtls
 ```
 
-Unit tests: 11 for service-a, 6 for service-b (validation, header handling, error mapping 429/502/504, query-parameter encoding, security headers) using MockMvc and `MockRestServiceServer`. They run in CI before anything touches AWS. Guards were mutation-checked: loosening the user-id length rule and removing the 429 passthrough each turned a test red before being restored. `verify.py` is the live proof and exits non-zero on any miss; CI runs it as the `smoke` job.
+Unit tests: 11 for service-a, 6 for service-b (validation, header handling, error mapping 429/502/504, query-parameter encoding, security headers) using MockMvc and `MockRestServiceServer`. They run in CI before anything touches AWS, and on every pull request via `ci.yml`, which also runs `terraform fmt`/`validate` (no backend) and a gitleaks scan. All third-party actions are pinned to commit SHAs. Locally, Maven needs a JDK that supports `--release 25` (Java 25 or newer); an older default JDK fails to compile with "release version 25 not supported". Guards were mutation-checked: loosening the user-id length rule and removing the 429 passthrough each turned a test red before being restored. `verify.py` is the live proof and exits non-zero on any miss; CI runs it as the `smoke` job.
 
 ## Layout
 
@@ -160,8 +160,10 @@ Unit tests: 11 for service-a, 6 for service-b (validation, header handling, erro
 | [k8s/test/tester.yaml](k8s/test/tester.yaml) | in-mesh curl pod used by `verify.py` |
 | [terraform](terraform) | VPC, EKS, node group, ECR, S3 backend config |
 | [terraform/bootstrap](terraform/bootstrap) | state bucket and the GitHub OIDC CI role (local state) |
-| [.github/workflows/deploy.yml](.github/workflows/deploy.yml) | test, plan, apply, images, deploy, smoke |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | pull-request checks, no AWS: unit tests, manifest parse, `terraform fmt`/`validate`, gitleaks |
+| [.github/workflows/deploy.yml](.github/workflows/deploy.yml) | test, plan, apply, images, deploy, smoke (push to `prod-hardening` only) |
 | [.github/workflows/destroy.yml](.github/workflows/destroy.yml) | manual teardown |
+| [CLAUDE.md](CLAUDE.md) | Repo-specific notes for AI coding sessions |
 | [scripts/deploy.py](scripts/deploy.py) | Helm-installs Istio, applies manifests with image substitution (CI and local) |
 | [scripts/verify.py](scripts/verify.py) | live proof: relay, validation, 50/5 rate limit both paths, mTLS rejection |
 | [scripts/bootstrap_kind.py](scripts/bootstrap_kind.py), [scripts/build_images.py](scripts/build_images.py), [kind](kind) | original local kind path |

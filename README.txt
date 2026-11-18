@@ -8,7 +8,7 @@ What was done
 - The Docker images are multi-stage and run as a non-root user.
 - Kubernetes: two copies of each service, health probes, CPU and memory limits, rules that stop Kubernetes taking the last copy down, read-only file systems, and mutual TLS (services must prove who they are to each other) switched to STRICT.
 - Terraform builds a private network, an EKS cluster with two t3.medium servers, and two image repositories (ECR). Its record of what exists is kept in a locked, versioned S3 bucket.
-- GitHub Actions logs in to AWS with a short-lived token (no passwords or keys stored anywhere) and runs: tests, Terraform plan, Terraform apply, build and push images, install Istio and the apps, then a live smoke test. This ran successfully end to end on 2026-10-20 (run 39392988777).
+- GitHub Actions logs in to AWS with a short-lived token (no passwords or keys stored anywhere) and runs: tests, Terraform plan, Terraform apply, build and push images, install Istio and the apps, then a live smoke test. On a pull request a lighter, AWS-free check runs instead: the unit tests, a syntax check of the Kubernetes and Terraform files, and a scan for leaked keys. This ran successfully end to end on 2026-10-20 (run 39392988777).
 
 What was proven on the live address
 Live address (changes every rebuild): http://a1f3ee6776b754e72938d7ed9b07ec66-239342470.ap-southeast-2.elb.amazonaws.com
